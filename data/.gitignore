@@ -1,0 +1,10 @@
+# Ignore all data files to prevent committing sensitive survey data
+*.xlsx
+*.csv
+*.parquet
+*.json
+*.db
+*.sqlite
+
+# Keep directory structure
+!.gitignore

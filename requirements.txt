@@ -1,0 +1,36 @@
+# Core Streamlit Dashboard
+streamlit>=1.28.0
+
+# Data Processing
+pandas>=2.1.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+pyarrow>=13.0.0
+
+# Visualizations
+plotly>=5.15.0
+
+# API & HTTP
+requests>=2.31.0
+urllib3>=1.26.0
+
+# Configuration & Environment
+python-dotenv>=1.0.0
+
+# Scheduling & Background Tasks
+schedule>=1.2.0
+APScheduler>=3.10.0
+
+# Logging & Monitoring
+structlog>=23.0.0
+
+# Testing (optional)
+pytest>=7.4.0
+pytest-mock>=3.11.0
+requests-mock>=1.11.0
+
+# Type Checking (optional)
+mypy>=1.5.0
+
+# Code Quality (optional)
+ruff>=0.0.280
