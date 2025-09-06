@@ -14,6 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from .utils.logging_utils import setup_logger
+from .kpi_calculator import KPICalculator
 
 logger = setup_logger('dashboard_components')
 
@@ -49,32 +50,6 @@ class DashboardComponents:
         
         self.st.sidebar.title("Filters")
         
-        # Date range filter
-        if 'submission_date' in df.columns:
-            date_col = pd.to_datetime(df['submission_date'])
-            min_date = date_col.min().date() if not date_col.empty else None
-            max_date = date_col.max().date() if not date_col.empty else None
-            
-            if min_date and max_date:
-                date_range = self.st.sidebar.date_input(
-                    "Date Range",
-                    value=(min_date, max_date),
-                    min_value=min_date,
-                    max_value=max_date
-                )
-                
-                # Handle single date selection
-                if isinstance(date_range, tuple) and len(date_range) == 2:
-                    start_date, end_date = date_range
-                elif len(date_range) == 1:
-                    start_date = end_date = date_range[0]
-                else:
-                    start_date = end_date = min_date
-                
-                # Store in session state
-                self.session.start_date = start_date
-                self.session.end_date = end_date
-        
         # State filter
         if 'state' in df.columns:
             states = sorted(df['state'].dropna().unique().tolist())
@@ -99,16 +74,6 @@ class DashboardComponents:
             else:
                 self.session.selected_facilities = []
         
-        # Version filter if available
-        if 'source_version' in df.columns:
-            versions = sorted(df['source_version'].dropna().unique().tolist())
-            if versions:
-                selected_versions = self.st.sidebar.multiselect(
-                    "Form Versions",
-                    options=versions,
-                    default=versions
-                )
-                self.session.selected_versions = selected_versions
     
     def filter_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -125,15 +90,6 @@ class DashboardComponents:
         
         filtered_df = df.copy()
         
-        # Apply date filter
-        if (hasattr(self.session, 'start_date') and hasattr(self.session, 'end_date') and 
-            'submission_date' in filtered_df.columns):
-            date_col = pd.to_datetime(filtered_df['submission_date'])
-            filtered_df = filtered_df[
-                (date_col >= pd.Timestamp(self.session.start_date)) &
-                (date_col <= pd.Timestamp(self.session.end_date))
-            ]
-        
         # Apply state filter
         if (hasattr(self.session, 'selected_states') and self.session.selected_states and 
             'state' in filtered_df.columns):
@@ -144,16 +100,12 @@ class DashboardComponents:
             'facility' in filtered_df.columns):
             filtered_df = filtered_df[filtered_df['facility'].isin(self.session.selected_facilities)]
         
-        # Apply version filter
-        if (hasattr(self.session, 'selected_versions') and self.session.selected_versions and 
-            'source_version' in filtered_df.columns):
-            filtered_df = filtered_df[filtered_df['source_version'].isin(self.session.selected_versions)]
         
         return filtered_df
     
     def create_kpi_cards(self, kpis: Dict[str, Any]) -> None:
         """
-        Create KPI cards display (Overview tab).
+        Create KPI cards display with maturity levels (Overview tab).
         
         Args:
             kpis: KPI dictionary from calculator
@@ -181,11 +133,20 @@ class DashboardComponents:
                 )
         
         with col3:
-            pct_full = kpis.get('overall_pct_full', 0)
-            self.st.metric(
-                label="% Fully Implemented",
-                value=f"{pct_full:.1f}%"
-            )
+            # Display overall maturity level instead of percentage
+            maturity_info = kpis.get('overall_maturity_level', {})
+            if maturity_info:
+                level_name = maturity_info.get('name', 'Unknown')
+                level_number = maturity_info.get('level', 'N/A')
+                self.st.metric(
+                    label="Maturity Level",
+                    value=f"Level {level_number}: {level_name}"
+                )
+            else:
+                self.st.metric(
+                    label="Maturity Level",
+                    value="N/A"
+                )
         
         with col4:
             self.st.metric(
@@ -193,46 +154,11 @@ class DashboardComponents:
                 value=f"{kpis.get('unique_facilities', 0):,}"
             )
     
-    def create_time_series_chart(self, time_series_df: pd.DataFrame, 
-                                metric: str = 'submission_count') -> None:
-        """
-        Create time series chart (Overview tab).
-        
-        Args:
-            time_series_df: Time series data
-            metric: Metric to plot
-        """
-        if time_series_df.empty:
-            self.st.warning("No time series data available.")
-            return
-        
-        self.st.subheader(f"Trend Over Time: {metric.replace('_', ' ').title()}")
-        
-        # Create line chart
-        chart_data = time_series_df[['date_bucket', metric]].copy()
-        
-        if not chart_data.empty:
-            # Use Plotly for better interactivity
-            fig = px.line(
-                chart_data, 
-                x='date_bucket', 
-                y=metric,
-                title=f"{metric.replace('_', ' ').title()} Over Time"
-            )
-            fig.update_layout(
-                xaxis_title="Date",
-                yaxis_title=metric.replace('_', ' ').title(),
-                height=400
-            )
-            self.st.plotly_chart(fig, use_container_width=True)
-        else:
-            self.st.warning("No data to display in time series chart.")
-    
     def create_facility_comparison(self, grouped_metrics_df: pd.DataFrame, 
                                  metric: str = 'overall_infrastructure_score', 
                                  top_n: int = 10) -> None:
         """
-        Create facility comparison chart (Facility Comparison tab).
+        Create facility comparison chart with maturity levels (Facility Comparison tab).
         
         Args:
             grouped_metrics_df: Grouped metrics dataframe
@@ -255,10 +181,34 @@ class DashboardComponents:
             self.st.warning("No valid facility data for comparison.")
             return
         
+        # Use existing maturity level columns if available, otherwise calculate
+        if 'overall_maturity_level' in top_facilities.columns:
+            top_facilities['maturity_name'] = top_facilities['overall_maturity_level']
+            # Map maturity names to colors
+            color_map = {
+                'Basic': '#FF4444',
+                'Developing': '#FFAA00', 
+                'Advancing': '#4488FF',
+                'Mature': '#00AA44',
+                'No Data': '#CCCCCC'
+            }
+            top_facilities['maturity_color'] = top_facilities['maturity_name'].map(color_map).fillna('#CCCCCC')
+        else:
+            # Fallback to calculation if columns don't exist
+            top_facilities['maturity_level'] = top_facilities[metric].apply(
+                lambda x: KPICalculator.get_maturity_level(x) if pd.notna(x) else None
+            )
+            top_facilities['maturity_name'] = top_facilities['maturity_level'].apply(
+                lambda x: x['name'] if x else 'N/A'
+            )
+            top_facilities['maturity_color'] = top_facilities['maturity_level'].apply(
+                lambda x: x['color'] if x else '#CCCCCC'
+            )
+        
         # Convert the metric name for display
         metric_name = metric.replace('_', ' ').title()
         
-        # Create facility label
+        # Create facility label with maturity level
         if 'state' in top_facilities.columns and 'facility' in top_facilities.columns:
             top_facilities['facility_label'] = (
                 top_facilities['facility'].astype(str) + 
@@ -269,81 +219,268 @@ class DashboardComponents:
         
         self.st.subheader(f"Top {len(top_facilities)} Facilities by {metric_name}")
         
-        # Create horizontal bar chart for better readability
+        # Create horizontal bar chart with maturity level colors
         fig = px.bar(
             top_facilities,
             x=metric,
             y='facility_label',
             orientation='h',
-            title=f"Top Facilities by {metric_name}",
-            color=metric,
-            color_continuous_scale='RdYlGn'
+            title=f"Top Facilities by {metric_name} (Colored by Maturity Level)",
+            color='maturity_name',
+            color_discrete_map={
+                'Basic': '#FF4444',
+                'Developing': '#FFAA00', 
+                'Advancing': '#4488FF',
+                'Mature': '#00AA44',
+                'N/A': '#CCCCCC'
+            },
+            hover_data={'maturity_name': True}
         )
         fig.update_layout(
             yaxis={'categoryorder': 'total ascending'},
-            height=max(400, len(top_facilities) * 30),
+            height=max(400, len(top_facilities) * 35),
             xaxis_title=metric_name,
-            yaxis_title="Facility"
+            yaxis_title="Facility",
+            legend_title="Maturity Level"
         )
         self.st.plotly_chart(fig, use_container_width=True)
+        
+        # Add maturity level distribution summary and domain breakdown
+        self.st.subheader("Maturity Level Distribution")
+        maturity_dist = top_facilities['maturity_name'].value_counts()
+        
+        col1, col2 = self.st.columns(2)
+        with col1:
+            # Pie chart of maturity levels
+            fig_pie = px.pie(
+                values=maturity_dist.values,
+                names=maturity_dist.index,
+                title="Overall Maturity Distribution",
+                color=maturity_dist.index,
+                color_discrete_map={
+                    'Basic': '#FF4444',
+                    'Developing': '#FFAA00', 
+                    'Advancing': '#4488FF',
+                    'Mature': '#00AA44',
+                    'No Data': '#CCCCCC',
+                    'N/A': '#CCCCCC'
+                }
+            )
+            self.st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with col2:
+            # Summary table
+            for level, count in maturity_dist.items():
+                percentage = (count / len(top_facilities)) * 100
+                self.st.metric(
+                    label=f"Level: {level}",
+                    value=f"{count} facilities ({percentage:.1f}%)"
+                )
+        
+        # Domain-level maturity heatmap
+        domain_maturity_cols = [col for col in grouped_metrics_df.columns 
+                               if col.endswith('_maturity_level') and not col.startswith('overall_')]
+        
+        if domain_maturity_cols and len(grouped_metrics_df) > 1:
+            self.st.subheader("Domain-Level Maturity Heatmap")
+            
+            # Create a simplified heatmap data
+            heatmap_data = []
+            for _, row in grouped_metrics_df.head(top_n).iterrows():
+                facility_name = f"{row.get('facility', 'Unknown')} ({row.get('state', 'Unknown')})"
+                for col in domain_maturity_cols:
+                    domain_name = col.replace('_maturity_level', '').replace('_', ' ').title()
+                    maturity_level = row.get(col, 'No Data')
+                    
+                    # Convert maturity level to numeric for heatmap
+                    level_map = {'Basic': 1, 'Developing': 2, 'Advancing': 3, 'Mature': 4, 'No Data': 0}
+                    level_num = level_map.get(maturity_level, 0)
+                    
+                    heatmap_data.append({
+                        'Facility': facility_name,
+                        'Domain': domain_name,
+                        'Maturity_Level': maturity_level,
+                        'Level_Numeric': level_num
+                    })
+            
+            if heatmap_data:
+                heatmap_df = pd.DataFrame(heatmap_data)
+                
+                # Create heatmap
+                pivot_data = heatmap_df.pivot(index='Facility', columns='Domain', values='Level_Numeric')
+                
+                fig = px.imshow(
+                    pivot_data.values,
+                    x=pivot_data.columns,
+                    y=pivot_data.index,
+                    color_continuous_scale=[
+                        [0, '#CCCCCC'],    # No Data
+                        [0.25, '#FF4444'], # Basic
+                        [0.5, '#FFAA00'],  # Developing
+                        [0.75, '#4488FF'], # Advancing
+                        [1.0, '#00AA44']   # Mature
+                    ],
+                    title="Domain Maturity Levels by Facility",
+                    labels={'color': 'Maturity Level'}
+                )
+                
+                # Update layout for better readability
+                fig.update_layout(
+                    height=max(400, len(pivot_data.index) * 30),
+                    xaxis_title="Domain",
+                    yaxis_title="Facility"
+                )
+                
+                # Add custom colorbar labels
+                fig.update_coloraxes(
+                    colorbar=dict(
+                        tickmode='array',
+                        tickvals=[0, 1, 2, 3, 4],
+                        ticktext=['No Data', 'Basic', 'Developing', 'Advancing', 'Mature']
+                    )
+                )
+                
+                self.st.plotly_chart(fig, use_container_width=True)
+                
+                # Show detailed domain breakdown for top facility
+                if not pivot_data.empty:
+                    self.st.subheader("Detailed Domain Breakdown (Top Facility)")
+                    top_facility_name = pivot_data.index[0]
+                    
+                    self.st.write(f"**{top_facility_name}** - Domain Details:")
+                    
+                    top_facility_data = heatmap_df[heatmap_df['Facility'] == top_facility_name]
+                    
+                    cols = self.st.columns(min(3, len(top_facility_data)))
+                    for i, (_, domain_row) in enumerate(top_facility_data.iterrows()):
+                        col_idx = i % len(cols)
+                        with cols[col_idx]:
+                            domain = domain_row['Domain']
+                            level = domain_row['Maturity_Level']
+                            level_num = domain_row['Level_Numeric']
+                            
+                            # Get the color for this level
+                            colors = {'Basic': '🔴', 'Developing': '🟡', 'Advancing': '🔵', 'Mature': '🟢', 'No Data': '⚫'}
+                            icon = colors.get(level, '⚫')
+                            
+                            self.st.metric(
+                                label=f"{icon} {domain}",
+                                value=f"Level {level_num}" if level_num > 0 else "No Data",
+                                delta=level
+                            )
     
     def create_indicator_deep_dive(self, df: pd.DataFrame, kpi_calculator) -> None:
         """
-        Create indicator deep dive analysis (Indicator Deep Dive tab).
+        Create indicator deep dive analysis with maturity levels (Indicator Deep Dive tab).
         
         Args:
             df: Filtered dataframe
             kpi_calculator: KPI calculator instance
         """
-        # List all available indicators
-        infrastructure_cols = [
-            col for col in df.columns 
-            if col.startswith('infrastructure_') and 
-            not any(col.endswith(suffix) for suffix in ['_is_full', '_is_partial', '_is_not', '_invalid_score'])
-            and df[col].dtype in ['int64', 'float64', 'Int64', 'Float64']
-        ]
+        # Get all indicator groups (domains)
+        all_groups = kpi_calculator.get_indicator_groups()
         
-        if not infrastructure_cols:
-            self.st.warning("No indicator columns found in the data.")
+        if not all_groups:
+            self.st.warning("No indicator groups found in the data.")
             return
         
-        # Format indicator names for display
-        indicator_options = {
-            col: col.replace('infrastructure_', '').replace('_', ' ').title() 
-            for col in infrastructure_cols
+        # Format group names for display
+        group_options = {
+            group: group.replace('_', ' ').title() 
+            for group in all_groups
         }
         
-        selected_indicator = self.st.selectbox(
-            "Select Indicator for Analysis",
-            options=list(indicator_options.keys()),
-            format_func=lambda x: indicator_options[x]
+        selected_group = self.st.selectbox(
+            "Select Domain for Analysis",
+            options=list(group_options.keys()),
+            format_func=lambda x: group_options[x],
+            help="Each domain represents a group of related indicators (e.g., Infrastructure, Staffing)"
         )
         
-        if selected_indicator and selected_indicator in df.columns:
-            indicator_name = indicator_options[selected_indicator]
+        if selected_group:
+            domain_name = group_options[selected_group]
             
-            # Create columns for side-by-side charts
+            # Calculate domain KPIs for all facilities  
+            domain_kpis = kpi_calculator.calculate_group_kpis(df, selected_group)
+            
+            if not domain_kpis:
+                self.st.warning(f"No data available for {domain_name} domain.")
+                return
+            
+            # Display domain-level metrics
+            col1, col2, col3 = self.st.columns(3)
+            
+            with col1:
+                avg_score = domain_kpis.get('group_average')
+                if avg_score is not None:
+                    self.st.metric(
+                        label=f"{domain_name} Average Score",
+                        value=f"{avg_score:.2f}"
+                    )
+            
+            with col2:
+                maturity_info = domain_kpis.get('maturity_level', {})
+                if maturity_info:
+                    level_name = maturity_info.get('name', 'Unknown')
+                    level_number = maturity_info.get('level', 'N/A')
+                    color = maturity_info.get('color', '#CCCCCC')
+                    
+                    # Display with color coding
+                    self.st.metric(
+                        label=f"{domain_name} Maturity Level",
+                        value=f"Level {level_number}: {level_name}"
+                    )
+                    
+                    # Add visual indicator
+                    colors = {'Basic': '🔴', 'Developing': '🟡', 'Advancing': '🔵', 'Mature': '🟢'}
+                    icon = colors.get(level_name, '⚫')
+                    self.st.write(f"{icon} **{level_name}** maturity level")
+            
+            with col3:
+                valid_responses = domain_kpis.get('total_responses', 0)
+                self.st.metric(
+                    label="Valid Responses",
+                    value=f"{valid_responses:,}"
+                )
+            
+            # Create columns for side-by-side analysis
             col1, col2 = self.st.columns(2)
             
             with col1:
-                # State distribution
+                # State-level analysis for this group
                 if 'state' in df.columns:
-                    self.st.subheader(f"Average Score by State: {indicator_name}")
-                    state_distribution = (
-                        df.groupby('state')[selected_indicator]
-                        .mean()
-                        .reset_index()
-                        .sort_values(by=selected_indicator, ascending=False)
-                    )
+                    self.st.subheader(f"{domain_name} by State")
                     
-                    if not state_distribution.empty:
+                    # Calculate group scores by state
+                    state_scores = []
+                    for state in df['state'].dropna().unique():
+                        state_df = df[df['state'] == state]
+                        state_kpis = kpi_calculator.calculate_group_kpis(state_df, selected_group)
+                        if state_kpis and state_kpis.get('group_average') is not None:
+                            maturity_info = state_kpis.get('maturity_level', {})
+                            state_scores.append({
+                                'state': state,
+                                'score': state_kpis['group_average'],
+                                'maturity_level': maturity_info.get('name', 'Unknown')
+                            })
+                    
+                    if state_scores:
+                        state_df_chart = pd.DataFrame(state_scores)
+                        state_df_chart = state_df_chart.sort_values('score', ascending=False)
+                        
                         fig = px.bar(
-                            state_distribution,
+                            state_df_chart,
                             x='state',
-                            y=selected_indicator,
-                            title=f"Average {indicator_name} by State",
-                            color=selected_indicator,
-                            color_continuous_scale='RdYlGn'
+                            y='score',
+                            title=f"{domain_name} Average Score by State",
+                            color='maturity_level',
+                            color_discrete_map={
+                                'Basic': '#FF4444',
+                                'Developing': '#FFAA00', 
+                                'Advancing': '#4488FF',
+                                'Mature': '#00AA44',
+                                'Unknown': '#CCCCCC'
+                            }
                         )
                         fig.update_layout(height=400)
                         self.st.plotly_chart(fig, use_container_width=True)
@@ -351,64 +488,44 @@ class DashboardComponents:
                         self.st.warning("No state data available.")
             
             with col2:
-                # Score distribution
-                self.st.subheader(f"Score Distribution: {indicator_name}")
-                value_counts = df[selected_indicator].value_counts().reset_index()
-                value_counts.columns = ['Score', 'Count']
+                # Individual indicators within this group
+                group_indicators = kpi_calculator._get_group_indicators(df, selected_group)
                 
-                # Map scores to labels
-                score_map = {
-                    0: 'Not Implemented', 
-                    1: 'Partially Implemented', 
-                    2: 'Fully Implemented'
-                }
-                
-                if not value_counts.empty:
-                    value_counts['Score_Label'] = value_counts['Score'].map(
-                        lambda x: score_map.get(x, 'Invalid Score')
-                    )
+                if group_indicators:
+                    self.st.subheader(f"Individual Indicators in {domain_name}")
                     
-                    fig = px.pie(
-                        value_counts,
-                        values='Count',
-                        names='Score_Label',
-                        title=f"{indicator_name} Distribution",
-                        color_discrete_map={
-                            'Not Implemented': '#ff4444',
-                            'Partially Implemented': '#ffaa44',
-                            'Fully Implemented': '#44ff44'
-                        }
-                    )
-                    fig.update_layout(height=400)
-                    self.st.plotly_chart(fig, use_container_width=True)
-                else:
-                    self.st.warning("No score data available.")
+                    indicator_scores = []
+                    for indicator in group_indicators:
+                        valid_values = df[indicator].dropna()
+                        if len(valid_values) > 0:
+                            avg_score = valid_values.mean()
+                            indicator_scores.append({
+                                'indicator': indicator.replace(f'{selected_group}_', '').replace('_', ' ').title(),
+                                'score': avg_score,
+                                'count': len(valid_values)
+                            })
+                    
+                    if indicator_scores:
+                        indicator_df = pd.DataFrame(indicator_scores)
+                        indicator_df = indicator_df.sort_values('score', ascending=True)
+                        
+                        fig = px.bar(
+                            indicator_df,
+                            x='score',
+                            y='indicator',
+                            orientation='h',
+                            title=f"Individual Indicators in {domain_name}",
+                            color='score',
+                            color_continuous_scale='RdYlGn'
+                        )
+                        fig.update_layout(
+                            height=max(400, len(indicator_df) * 30),
+                            yaxis={'categoryorder': 'total ascending'}
+                        )
+                        self.st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        self.st.warning("No individual indicator data available.")
             
-            # Time trend analysis
-            if 'submission_date' in df.columns:
-                self.st.subheader(f"Weekly Trend: {indicator_name}")
-                
-                # Create weekly aggregation
-                df_copy = df.copy()
-                df_copy['week'] = pd.to_datetime(df_copy['submission_date']).dt.to_period('W').dt.start_time
-                weekly_trend = (
-                    df_copy.groupby('week')[selected_indicator]
-                    .mean()
-                    .reset_index()
-                )
-                
-                if not weekly_trend.empty:
-                    fig = px.line(
-                        weekly_trend,
-                        x='week',
-                        y=selected_indicator,
-                        title=f"Weekly Average {indicator_name}",
-                        markers=True
-                    )
-                    fig.update_layout(height=400)
-                    self.st.plotly_chart(fig, use_container_width=True)
-                else:
-                    self.st.warning("No time trend data available.")
     
     def create_data_quality_view(self, df: pd.DataFrame) -> None:
         """

@@ -27,12 +27,32 @@ class DataProcessor:
     
     Handles multi-sheet parsing, column normalization, data type conversion,
     and quality checks as per FR-6, FR-7, FR-8, FR-9 requirements.
+    
+    Uses group-based indicator structure with 0/1/2/N/A scoring system:
+    - 0 = Not implemented
+    - 1 = Partially implemented  
+    - 2 = Fully implemented
+    - N/A = Not applicable
     """
+    
+    # Define indicator groups based on KoboToolbox survey structure
+    INDICATOR_GROUPS = {
+        'infrastructure': 'group_infrastructure',
+        'staffing': 'staffing_human_resources', 
+        'service_delivery': 'service_delivery_processes',
+        'clinical_care': 'clinical_care_quality',
+        'commodity': 'commodity_management',
+        'health_info': 'health_information_systems',
+        'quality_improvement': 'quality_improvement',
+        'leadership': 'leadership_governance_sustainability',
+        'client_experience': 'client_experience_satisfaction',
+        'pediatric': 'pediatric_adolescent_services'
+    }
     
     def __init__(self):
         """Initialize data processor."""
         self.processing_stats = {}
-        logger.info("Initialized DataProcessor")
+        logger.info("Initialized DataProcessor with group-based indicator structure")
     
     def process_xlsx(self, xlsx_file: str) -> Dict[str, pd.DataFrame]:
         """
@@ -137,11 +157,11 @@ class DataProcessor:
         # Convert score columns to numeric, preserving n/a as None (FR-7)
         self._convert_score_columns(clean_df)
         
-        # Add derived indicator columns (is_full, is_partial, is_not)
-        self._add_derived_indicator_columns(clean_df)
-        
         # Add source version field (FR-8)
         self._add_source_version_field(clean_df)
+        
+        # Add derived indicator columns and get the optimized DataFrame
+        clean_df = self._add_derived_indicator_columns_optimized(clean_df)
         
         # Perform data quality checks (FR-9)
         self._mark_data_quality_issues(clean_df)
@@ -183,7 +203,11 @@ class DataProcessor:
     
     def _normalize_column_name(self, column_name: str) -> str:
         """
-        Normalize column name by replacing / with _ and cleaning up.
+        Normalize column name by replacing / with _ and applying group mappings.
+        
+        Maps KoboToolbox group names to shorter, cleaner names:
+        - group_infrastructure/adequate_space → infrastructure_adequate_space
+        - staffing_human_resources/staff_adequacy → staffing_staff_adequacy
         
         Args:
             column_name: Original column name
@@ -194,11 +218,11 @@ class DataProcessor:
         # Replace / with _
         normalized = column_name.replace('/', '_')
         
-        # Remove leading group names if verbose (e.g., group_infrastructure/... → infrastructure_...)
-        if normalized.startswith('group_'):
-            parts = normalized.split('_', 1)
-            if len(parts) > 1:
-                normalized = parts[1]
+        # Apply group name mappings
+        for short_name, long_name in self.INDICATOR_GROUPS.items():
+            if normalized.startswith(f'{long_name}_'):
+                normalized = normalized.replace(f'{long_name}_', f'{short_name}_', 1)
+                break
         
         # Clean up multiple underscores
         normalized = re.sub(r'_+', '_', normalized)
@@ -253,33 +277,166 @@ class DataProcessor:
             logger.warning("No facility column found")
     
     def _convert_score_columns(self, df: pd.DataFrame) -> None:
-        """Convert score columns to numeric, preserving n/a as None (FR-7)."""
-        # Identify score columns (typically infrastructure_* with 0/1/2/n/a values)
-        infrastructure_cols = [col for col in df.columns if col.startswith('infrastructure_')]
+        """Convert score columns to numeric, preserving N/A as None (FR-7).
         
-        for col in infrastructure_cols:
-            # Convert to numeric, keeping 'n/a' and similar as NaN
-            original_values = df[col].value_counts()
+        Scoring system:
+        - 0 = Not implemented
+        - 1 = Partially implemented  
+        - 2 = Fully implemented
+        - N/A = Not applicable (converted to NaN)
+        """
+        # Get score columns by group
+        score_columns = self._get_score_columns(df)
+        
+        logger.info(f"Found {len(score_columns)} score columns across {len(set(col.split('_')[0] for col in score_columns))} indicator groups")
+        
+        converted_count = 0
+        for col in score_columns:
+            original_dtype = df[col].dtype
+            original_values = df[col].value_counts(dropna=False)
+            
+            # Convert to numeric, keeping 'N/A', 'n/a', 'na', etc. as NaN
             df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Validate converted values are in valid range {0, 1, 2}
+            valid_values = df[col].dropna()
+            invalid_mask = ~valid_values.isin([0, 1, 2])
+            if invalid_mask.any():
+                invalid_count = invalid_mask.sum()
+                logger.warning(f"Column {col}: {invalid_count} invalid scores (not in 0/1/2 range)")
             
             # Log conversion stats
             null_count = df[col].isna().sum()
             if null_count > 0:
-                logger.debug(f"Column {col}: {null_count} values converted to NaN (likely n/a)")
+                logger.debug(f"Column {col}: {null_count} N/A values (excluded from calculations)")
+            
+            if original_dtype == 'object':
+                converted_count += 1
+                
+        logger.info(f"Converted {converted_count} columns from text to numeric scores")
+    
+    def _get_score_columns(self, df: pd.DataFrame) -> List[str]:
+        """Get all score columns by group, excluding comment/evidence fields."""
+        score_columns = []
+        
+        for group_name in self.INDICATOR_GROUPS.keys():
+            # Find columns that start with this group prefix
+            group_cols = [col for col in df.columns if col.startswith(f'{group_name}_')]
+            
+            # Filter out comment/evidence/additional columns
+            filtered_cols = []
+            for col in group_cols:
+                if any(keyword in col.lower() for keyword in ['comment', 'evidence', 'additional']):
+                    continue
+                filtered_cols.append(col)
+            
+            score_columns.extend(filtered_cols)
+            logger.debug(f"Group '{group_name}': {len(filtered_cols)} score columns")
+        
+        return score_columns
     
     def _add_derived_indicator_columns(self, df: pd.DataFrame) -> None:
-        """Add derived boolean columns for indicator analysis."""
-        infrastructure_cols = [col for col in df.columns if 
-                              col.startswith('infrastructure_') and 
-                              df[col].dtype in ['int64', 'float64']]
+        """Add derived boolean columns for indicator analysis by group.
         
-        for col in infrastructure_cols:
-            # Create boolean indicators
-            df[f'{col}_is_full'] = (df[col] == 2)
-            df[f'{col}_is_partial'] = (df[col] == 1)
-            df[f'{col}_is_not'] = (df[col] == 0)
+        Creates boolean flags for each score:
+        - {col}_is_full = True when score = 2 (Fully implemented)
+        - {col}_is_partial = True when score = 1 (Partially implemented) 
+        - {col}_is_not = True when score = 0 (Not implemented)
+        - N/A values are excluded (False for all flags)
+        """
+        # Get score columns for derivation
+        score_columns = self._get_score_columns(df)
+        numeric_score_cols = [col for col in score_columns if 
+                             df[col].dtype in ['int64', 'float64', 'Int64', 'Float64']]
         
-        logger.debug(f"Added derived columns for {len(infrastructure_cols)} indicators")
+        logger.info(f"Creating derived boolean columns for {len(numeric_score_cols)} indicators")
+        
+        # Create all derived columns at once to avoid DataFrame fragmentation
+        derived_data = {}
+        derived_cols_by_group = {}
+        
+        for col in numeric_score_cols:
+            # Determine which group this column belongs to
+            group_name = col.split('_')[0]
+            if group_name not in derived_cols_by_group:
+                derived_cols_by_group[group_name] = []
+            
+            # Create boolean indicators based on 0/1/2 scoring
+            derived_data[f'{col}_is_full'] = (df[col] == 2)
+            derived_data[f'{col}_is_partial'] = (df[col] == 1) 
+            derived_data[f'{col}_is_not'] = (df[col] == 0)
+            
+            derived_cols_by_group[group_name].extend([
+                f'{col}_is_full',
+                f'{col}_is_partial', 
+                f'{col}_is_not'
+            ])
+        
+        # This is the old method that causes fragmentation - keeping for compatibility
+        # The new optimized method is _add_derived_indicator_columns_optimized
+        pass
+    
+    def _add_derived_indicator_columns_optimized(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add derived boolean columns efficiently without DataFrame fragmentation.
+        
+        Args:
+            df: Input DataFrame
+            
+        Returns:
+            New DataFrame with derived columns added
+        """
+        # Get score columns for derivation
+        score_columns = self._get_score_columns(df)
+        numeric_score_cols = [col for col in score_columns if 
+                             df[col].dtype in ['int64', 'float64', 'Int64', 'Float64']]
+        
+        logger.info(f"Creating derived boolean columns for {len(numeric_score_cols)} indicators")
+        
+        if not numeric_score_cols:
+            return df
+        
+        # Create all derived columns at once to avoid DataFrame fragmentation
+        derived_dfs = []
+        derived_cols_by_group = {}
+        
+        for col in numeric_score_cols:
+            # Determine which group this column belongs to
+            group_name = col.split('_')[0]
+            if group_name not in derived_cols_by_group:
+                derived_cols_by_group[group_name] = []
+            
+            # Create boolean indicators based on 0/1/2 scoring
+            col_derived = pd.DataFrame({
+                f'{col}_is_full': (df[col] == 2),
+                f'{col}_is_partial': (df[col] == 1),
+                f'{col}_is_not': (df[col] == 0)
+            }, index=df.index)
+            
+            derived_dfs.append(col_derived)
+            
+            derived_cols_by_group[group_name].extend([
+                f'{col}_is_full',
+                f'{col}_is_partial', 
+                f'{col}_is_not'
+            ])
+        
+        # Concatenate all derived columns at once
+        if derived_dfs:
+            all_derived = pd.concat(derived_dfs, axis=1)
+            result_df = pd.concat([df, all_derived], axis=1)
+            
+            # Log summary by group
+            for group_name, derived_cols in derived_cols_by_group.items():
+                base_indicators = len(derived_cols) // 3  # 3 derived cols per base indicator
+                logger.debug(f"Group '{group_name}': {base_indicators} indicators → {len(derived_cols)} derived columns")
+            
+            total_derived = len(all_derived.columns)
+            logger.info(f"Added {total_derived} derived boolean columns across {len(derived_cols_by_group)} groups")
+            
+            return result_df
+        else:
+            logger.info("No numeric score columns found for derived indicators")
+            return df
     
     def _add_source_version_field(self, df: pd.DataFrame) -> None:
         """Add source version field from __version__ (FR-8)."""
@@ -290,27 +447,53 @@ class DataProcessor:
             logger.warning("No __version__ column found")
     
     def _mark_data_quality_issues(self, df: pd.DataFrame) -> None:
-        """Mark data quality issues (FR-9)."""
-        # Check for duplicates based on _uuid
-        if '_uuid' in df.columns:
-            df['is_duplicate'] = df.duplicated(subset=['_uuid'], keep='first')
-            duplicate_count = df['is_duplicate'].sum()
-            if duplicate_count > 0:
-                logger.warning(f"Found {duplicate_count} duplicate records")
+        """Mark and resolve data quality issues (FR-9)."""
+        # Check for duplicate facilities and keep the one with the latest end date
+        if 'facility' in df.columns and 'end' in df.columns:
+            # Find duplicate facilities
+            duplicate_facilities = df[df.duplicated(subset=['facility'], keep=False)]['facility'].unique()
+            
+            if len(duplicate_facilities) > 0:
+                logger.warning(f"Found duplicate facilities: {duplicate_facilities.tolist()}")
+                
+                # For each duplicate facility, keep only the record with the latest end date
+                rows_to_drop = []
+                for facility in duplicate_facilities:
+                    facility_rows = df[df['facility'] == facility].copy()
+                    
+                    # Sort by end date (latest first) and keep only the first one
+                    facility_rows = facility_rows.sort_values('end', ascending=False)
+                    latest_row_idx = facility_rows.index[0]
+                    
+                    # Mark all other rows for removal
+                    other_rows = facility_rows.index[1:]
+                    rows_to_drop.extend(other_rows)
+                    
+                    logger.info(f"Facility '{facility}': keeping latest record from {facility_rows.loc[latest_row_idx, 'end']}, removing {len(other_rows)} older records")
+                
+                # Remove duplicate rows in-place
+                df.drop(rows_to_drop, inplace=True)
+                df.reset_index(drop=True, inplace=True)
+                
+                logger.info(f"Removed {len(rows_to_drop)} duplicate facility records, kept latest submissions")
+            else:
+                logger.info("No duplicate facilities found")
         else:
-            df['is_duplicate'] = False
-            logger.warning("No _uuid column found for duplicate detection")
+            missing_cols = []
+            if 'facility' not in df.columns:
+                missing_cols.append('facility')
+            if 'end' not in df.columns:
+                missing_cols.append('end')
+            logger.warning(f"Cannot check for duplicate facilities: missing columns {missing_cols}")
         
         # Check for missing critical fields
-        critical_fields = ['state', 'facility', 'submission_date']
+        critical_fields = ['state', 'facility']
         for field in critical_fields:
             if field in df.columns:
                 missing_count = df[field].isna().sum()
-                df[f'missing_{field}'] = df[field].isna()
                 if missing_count > 0:
                     logger.warning(f"Missing {field}: {missing_count} records ({missing_count/len(df)*100:.1f}%)")
             else:
-                df[f'missing_{field}'] = True
                 logger.warning(f"Critical field '{field}' not found")
         
         # Check for out-of-range scores
@@ -361,33 +544,60 @@ class DataProcessor:
         summary = {
             'total_records': len(df),
             'total_columns': len(df.columns),
-            'duplicates': 0,
+            'duplicate_facilities_found': 0,
+            'duplicate_facilities_removed': 0,
+            'unique_facilities': 0,
+            'unique_states': 0,
             'missing_critical_fields': {},
-            'invalid_scores': {},
+            'invalid_scores_by_group': {},
             'completeness_score': 0.0
         }
         
-        # Count duplicates
-        if 'is_duplicate' in df.columns:
-            summary['duplicates'] = df['is_duplicate'].sum()
+        # Check for facility uniqueness (main quality check)
+        if 'facility' in df.columns:
+            facility_counts = df['facility'].value_counts()
+            duplicates = facility_counts[facility_counts > 1]
+            summary['duplicate_facilities_found'] = len(duplicates)
+            summary['unique_facilities'] = df['facility'].nunique()
+            
+            if len(duplicates) > 0:
+                logger.info(f"Quality check: {len(duplicates)} facilities have multiple submissions")
+        
+        if 'state' in df.columns:
+            summary['unique_states'] = df['state'].nunique()
         
         # Count missing critical fields
-        critical_fields = ['state', 'facility', 'submission_date']
+        critical_fields = ['state', 'facility']
         for field in critical_fields:
-            missing_col = f'missing_{field}'
-            if missing_col in df.columns:
-                summary['missing_critical_fields'][field] = df[missing_col].sum()
+            if field in df.columns:
+                missing_count = df[field].isna().sum()
+                summary['missing_critical_fields'][field] = missing_count
+            else:
+                summary['missing_critical_fields'][field] = len(df)  # All missing if column doesn't exist
         
-        # Count invalid scores
+        # Count invalid scores by group
         invalid_cols = [col for col in df.columns if col.endswith('_invalid_score')]
+        invalid_by_group = {}
+        
         for col in invalid_cols:
             field_name = col.replace('_invalid_score', '')
-            summary['invalid_scores'][field_name] = df[col].sum()
+            invalid_count = df[col].sum()
+            
+            if invalid_count > 0:
+                group_name = field_name.split('_')[0] if '_' in field_name else 'unknown'
+                if group_name not in invalid_by_group:
+                    invalid_by_group[group_name] = 0
+                invalid_by_group[group_name] += invalid_count
         
-        # Calculate overall completeness score
+        summary['invalid_scores_by_group'] = invalid_by_group
+        
+        # Calculate overall completeness score based on critical fields only
         total_critical_missing = sum(summary['missing_critical_fields'].values())
-        if len(critical_fields) > 0 and len(df) > 0:
-            completeness = 1 - (total_critical_missing / (len(df) * len(critical_fields)))
+        critical_fields_count = len([f for f in critical_fields if f in df.columns])
+        
+        if critical_fields_count > 0 and len(df) > 0:
+            max_possible_missing = len(df) * critical_fields_count
+            completeness = 1 - (total_critical_missing / max_possible_missing)
             summary['completeness_score'] = max(0.0, completeness)
         
         return summary

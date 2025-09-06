@@ -31,7 +31,7 @@ class KoboAPI:
     as per FR-1, FR-2, FR-3 requirements.
     """
     
-    def __init__(self, base_url: str, asset_uid: str, api_token: str):
+    def __init__(self, base_url: str, asset_uid: str, api_token: str, export_settings_uid: str):
         """
         Initialize KoboAPI client.
         
@@ -43,6 +43,7 @@ class KoboAPI:
         self.base_url = base_url.rstrip('/')
         self.asset_uid = asset_uid
         self.api_token = api_token
+        self.export_settings_uid = export_settings_uid
         
         # Setup session with retry strategy
         self.session = requests.Session()
@@ -104,7 +105,7 @@ class KoboAPI:
             
             raise KoboAPIError(f"API request failed: {str(e)}") from e
     
-    def get_export_settings(self, export_settings_uid: Optional[str] = None) -> Dict[str, Any]:
+    def get_export_settings(self) -> Dict[str, Any]:
         """
         Retrieve export settings for the asset.
         
@@ -117,15 +118,15 @@ class KoboAPI:
         Raises:
             KoboAPIError: If no export settings found
         """
-        if export_settings_uid:
-            url = f"{self.base_url}/api/v2/assets/{self.asset_uid}/export-settings/{export_settings_uid}/"
+        if self.export_settings_uid:
+            url = f"{self.base_url}/api/v2/assets/{self.asset_uid}/export-settings/{self.export_settings_uid}.json"
         else:
             url = f"{self.base_url}/api/v2/assets/{self.asset_uid}/export-settings/"
         
         response = self._make_request(url)
         data = response.json()
         
-        if export_settings_uid:
+        if self.export_settings_uid:
             return data
         else:
             # Return the first export setting if multiple exist
@@ -151,7 +152,7 @@ class KoboAPI:
             KoboAPIError: If download fails
         """
         # Get export settings to find XLSX URL
-        settings = self.get_export_settings(export_settings_uid)
+        settings = self.get_export_settings()
         
         # Get XLSX URL
         xlsx_url = settings.get("data_url_xlsx")
@@ -212,7 +213,7 @@ class KoboAPI:
         Returns:
             Asset information dictionary
         """
-        url = f"{self.base_url}/api/v2/assets/{self.asset_uid}/"
+        url = f"{self.base_url}/api/v2/assets/{self.asset_uid}.json"
         response = self._make_request(url)
         return response.json()
     
