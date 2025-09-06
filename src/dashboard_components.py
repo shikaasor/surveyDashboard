@@ -124,15 +124,16 @@ class DashboardComponents:
             )
         
         with col2:
-            score = kpis.get('overall_infrastructure_score', 0)
+            # Use overall composite score instead of infrastructure score
+            score = kpis.get('overall_composite_score')
             if score is not None:
                 self.st.metric(
-                    label="Avg Infrastructure Score",
+                    label="Overall Composite Score",
                     value=f"{score:.2f}"
                 )
             else:
                 self.st.metric(
-                    label="Avg Infrastructure Score",
+                    label="Overall Composite Score",
                     value="N/A"
                 )
         

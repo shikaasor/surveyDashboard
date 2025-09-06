@@ -172,20 +172,29 @@ def main():
         # Display KPI cards with maturity levels
         components.create_kpi_cards(kpis)
         
-        # Add overall maturity distribution
-        if 'maturity_distribution' in kpis:
-            st.subheader("Overall Maturity Distribution")
+        # Add facility maturity distribution (corrected)
+        st.subheader("Facility Maturity Distribution")
+        
+        # Calculate facility-level metrics to get correct maturity distribution
+        facility_metrics = kpi_calculator.calculate_grouped_metrics(
+            filtered_df, 
+            group_by=['state', 'facility']
+        )
+        
+        if not facility_metrics.empty and 'overall_composite_score' in facility_metrics.columns:
+            # Get facility scores and calculate correct distribution
+            facility_scores = facility_metrics['overall_composite_score'].dropna().tolist()
+            facility_maturity_dist = kpi_calculator.get_maturity_distribution(facility_scores)
             
             col1, col2 = st.columns(2)
             
             with col1:
-                # Pie chart of maturity levels across all facilities
-                maturity_dist = kpis['maturity_distribution']
-                if maturity_dist:
+                # Pie chart of maturity levels across facilities
+                if facility_maturity_dist and facility_maturity_dist['total_facilities'] > 0:
                     import plotly.express as px
                     
                     # Prepare data for pie chart
-                    level_counts = maturity_dist.get('level_counts', {})
+                    level_counts = facility_maturity_dist.get('level_counts', {})
                     # Map level numbers to representative scores
                     level_to_score = {1: 0.25, 2: 0.75, 3: 1.25, 4: 1.75}
                     dist_data = pd.DataFrame([
@@ -208,9 +217,9 @@ def main():
             
             with col2:
                 # Summary metrics for each maturity level
-                st.write("**Maturity Level Summary:**")
-                total_facilities = maturity_dist.get('total_facilities', 0)
-                level_counts = maturity_dist.get('level_counts', {})
+                st.write("**Facility Maturity Summary:**")
+                total_facilities = facility_maturity_dist.get('total_facilities', 0)
+                level_counts = facility_maturity_dist.get('level_counts', {})
                 level_to_score = {1: 0.25, 2: 0.75, 3: 1.25, 4: 1.75}
                 
                 for level, count in level_counts.items():
@@ -221,6 +230,8 @@ def main():
                             label=f"Level {level}: {level_info['name']}",
                             value=f"{count} facilities ({percentage:.1f}%)"
                         )
+        else:
+            st.warning("No facility data available for maturity distribution.")
         
         
         # Display state comparison with maturity levels
@@ -229,7 +240,14 @@ def main():
             group_by=['state']
         )
         
-        st.subheader("State Performance with Maturity Levels")
+        # State Performance Section
+        num_states = len(state_metrics) if not state_metrics.empty else 0
+        if num_states == 1:
+            st.subheader(f"State Summary")
+            st.write("*Note: Data currently contains facilities from one state.*")
+        else:
+            st.subheader("State Performance Comparison")
+        
         if not state_metrics.empty:
             # Display with existing maturity level columns from grouped_metrics
             display_cols = ['state', 'overall_composite_score', 'overall_maturity_level', 'submission_count']
@@ -239,7 +257,7 @@ def main():
                 display_df = state_metrics[available_cols].copy()
                 display_df = display_df.rename(columns={
                     'overall_composite_score': 'Overall Score',
-                    'overall_maturity_level': 'Maturity Level',
+                    'overall_maturity_level': 'Maturity Level', 
                     'submission_count': 'Facilities'
                 })
                 
@@ -247,18 +265,25 @@ def main():
                     display_df.sort_values('Overall Score', ascending=False, na_position='last')
                 )
             
-            # Show domain-level maturity breakdown for states
-            st.subheader("Domain-Level Maturity by State")
+            # Show domain-level maturity breakdown
+            if num_states == 1:
+                st.subheader("Domain-Level Performance Summary")
+            else:
+                st.subheader("Domain-Level Maturity by State")
+            
             domain_cols = [col for col in state_metrics.columns if col.endswith('_maturity_level') and not col.startswith('overall_')]
             
             if domain_cols:
                 # Create a summary of domain maturity levels
-                st.write("**Domain Maturity Levels Across States:**")
+                if num_states == 1:
+                    st.write("**Performance across assessment domains:**")
+                else:
+                    st.write("**Domain Maturity Levels Across States:**")
                 
-                # Select top 3 states for detailed breakdown
-                top_states = state_metrics.nlargest(3, 'overall_composite_score') if 'overall_composite_score' in state_metrics.columns else state_metrics.head(3)
+                # Show all states for single state, top 3 for multiple states
+                display_states = state_metrics if num_states == 1 else state_metrics.nlargest(3, 'overall_composite_score')
                 
-                for _, state_row in top_states.iterrows():
+                for _, state_row in display_states.iterrows():
                     state_name = state_row['state']
                     overall_level = state_row.get('overall_maturity_level', 'N/A')
                     
