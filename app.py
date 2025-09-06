@@ -113,7 +113,7 @@ def load_cached_data():
 
 def main():
     """Main dashboard application."""
-    st.title("KoboToolbox Analytics Dashboard")
+    st.title("ACE2 Site Assessment Analytics Dashboard")
     
     # Load data if not in session state
     if st.session_state.data is None:
@@ -127,9 +127,9 @@ def main():
                         st.rerun()
                     return
     
-    # Show last refresh time
-    if st.session_state.last_refresh:
-        st.sidebar.write(f"Last refreshed: {st.session_state.last_refresh.strftime('%Y-%m-%d %H:%M:%S')}")
+    # # Show last refresh time
+    # if st.session_state.last_refresh:
+    #     st.sidebar.write(f"Last refreshed: {st.session_state.last_refresh.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Manual refresh button (admin only)
     if st.session_state.is_admin:

@@ -8,6 +8,7 @@ including filters, visualizations, and data quality views.
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 from io import BytesIO
 from typing import Dict, Any, List, Optional
 import plotly.express as px
@@ -44,6 +45,9 @@ class DashboardComponents:
         Args:
             df: DataFrame to create filters from
         """
+        # Add logo at the top of sidebar
+        self._add_sidebar_logo()
+        
         if df.empty:
             self.st.sidebar.warning("No data available for filtering")
             return
@@ -696,3 +700,57 @@ class DashboardComponents:
                 file_name=f"kobo_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+    
+    def _add_sidebar_logo(self) -> None:
+        """Add logo to the top of the sidebar."""
+        try:
+            # Try to load logo from assets directory
+            logo_path = "assets/logo.png"
+            if os.path.exists(logo_path):
+                # Embed image in white box
+                self.st.sidebar.markdown(
+                    f"""
+                    <div style="
+                        background-color: white;
+                        padding: 15px;
+                        border-radius: 10px;
+                        margin-bottom: 20px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        text-align: center;
+                    ">
+                        <img src="data:image/png;base64,{self._get_base64_image(logo_path)}" 
+                             style="max-width: 180px; height: auto;">
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            else:
+                # Fallback to text-based logo in white box
+                self.st.sidebar.markdown(
+                    """
+                    <div style="
+                        background-color: white;
+                        padding: 15px;
+                        border-radius: 10px;
+                        margin-bottom: 20px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        text-align: center;
+                    ">
+                        <h2 style="color: #2E86C1; margin: 0;">🏥</h2>
+                        <h3 style="color: #2E86C1; margin: 5px 0;">ACE2</h3>
+                        <p style="color: #85929E; margin: 0; font-size: 12px;">Site Assessment</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            
+        except Exception as e:
+            # If there's any error, just skip the logo
+            logger.debug(f"Could not add sidebar logo: {str(e)}")
+            pass
+    
+    def _get_base64_image(self, image_path: str) -> str:
+        """Convert image to base64 string for embedding."""
+        import base64
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode()
