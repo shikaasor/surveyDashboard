@@ -256,9 +256,17 @@ class DataProcessor:
     
     def _normalize_location_fields(self, df: pd.DataFrame) -> None:
         """Normalize state and facility names (FR-8)."""
-        # Find state and facility columns
-        state_cols = [col for col in df.columns if 'state' in col.lower()]
-        facility_cols = [col for col in df.columns if 'facility' in col.lower()]
+        # Find state and facility columns with better specificity
+        # Look for columns that end with 'state' or 'facility' to avoid ambiguity
+        state_cols = [col for col in df.columns if col.lower().endswith('_state') or col.lower() == 'state']
+        if not state_cols:
+            # Fallback to containing 'state' but not 'facility'
+            state_cols = [col for col in df.columns if 'state' in col.lower() and 'facility' not in col.lower()]
+        
+        facility_cols = [col for col in df.columns if col.lower().endswith('_facility') or col.lower() == 'facility']
+        if not facility_cols:
+            # Fallback to containing 'facility' but not 'state'  
+            facility_cols = [col for col in df.columns if 'facility' in col.lower() and 'state' not in col.lower()]
         
         # Normalize state
         if state_cols:

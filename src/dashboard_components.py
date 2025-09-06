@@ -676,8 +676,18 @@ class DashboardComponents:
         with col2:
             # Excel download
             output = BytesIO()
+            
+            # Create a copy of the dataframe and strip timezone info from datetime columns
+            # Excel doesn't support timezone-aware datetimes
+            df_for_excel = df.copy()
+            for col in df_for_excel.columns:
+                if pd.api.types.is_datetime64_any_dtype(df_for_excel[col]):
+                    # Convert timezone-aware datetimes to timezone-unaware
+                    if df_for_excel[col].dt.tz is not None:
+                        df_for_excel[col] = df_for_excel[col].dt.tz_localize(None)
+            
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name='Survey_Data')
+                df_for_excel.to_excel(writer, index=False, sheet_name='Survey_Data')
             excel_data = output.getvalue()
             
             self.st.download_button(

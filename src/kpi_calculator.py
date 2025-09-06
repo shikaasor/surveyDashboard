@@ -518,6 +518,19 @@ class KPICalculator:
         
         return group_cols
     
+    def _get_group_indicators(self, df: pd.DataFrame, group_name: str) -> List[str]:
+        """
+        Get list of indicator columns for a specific group (alias for _get_group_columns).
+        
+        Args:
+            df: DataFrame to analyze
+            group_name: Name of the indicator group
+            
+        Returns:
+            List of column names for the group
+        """
+        return self._get_group_columns(df, group_name)
+    
     def _calculate_group_kpis(self, clean_df: pd.DataFrame, group_cols: List[str], group_name: str) -> Dict[str, Any]:
         """
         Calculate KPIs for a specific indicator group.
