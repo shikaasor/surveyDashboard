@@ -53,14 +53,12 @@ def fetch_and_process_data():
         kobo = KoboAPI(
             base_url=config['KOBO_BASE_URL'],
             asset_uid=config['KOBO_ASSET_UID'],
-            api_token=config['KOBO_API_TOKEN']
+            api_token=config['KOBO_API_TOKEN'],
+            export_settings_uid=config.get('KOBO_EXPORT_SETTINGS_UID')
         )
         
-        # Get export settings UID
-        export_settings_uid = config.get('KOBO_EXPORT_SETTINGS_UID')
-        
         # Download XLSX
-        xlsx_file, settings = kobo.download_data_xlsx(export_settings_uid)
+        xlsx_file, settings = kobo.download_data_xlsx()
         
         # Process data
         processor = DataProcessor()
