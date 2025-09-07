@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: kobo-dashboard
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+    healthCheckPath: /healthz
+    envVars:
+      - key: KOBO_BASE_URL
+        sync: false
+      - key: KOBO_ASSET_UID
+        sync: false
+      - key: KOBO_API_TOKEN
+        sync: false
+      - key: KOBO_EXPORT_SETTINGS_UID
+        sync: false
+      - key: REFRESH_INTERVAL
+        value: "3600"
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: STREAMLIT_SERVER_HEADLESS
+        value: "true"
+      - key: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+        value: "false"
