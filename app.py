@@ -438,7 +438,7 @@ def admin_page():
 if __name__ == "__main__":
     # Set up page config
     st.set_page_config(
-        page_title="KoboToolbox Analytics Dashboard",
+        page_title="ACE2 Site Assessment Analytics Dashboard",
         page_icon="📊",
         layout="wide"
     )
